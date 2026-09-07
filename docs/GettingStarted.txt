@@ -1,0 +1,27 @@
+﻿Swift Launcher 1.0
+
+Ctrl+Space: open or hide Swift.
+Type to search apps and files. Each opening clears the previous query.
+All is the default filter; click the filter button or press Tab to change it.
+Scroll or use Up/Down to select, Enter to open, Ctrl+Enter to reveal in Explorer.
+Escape or switching to another app dismisses Swift.
+Right-click the tray icon for refresh, search folders, and Exit.
+
+Installation
+Setup installs for the current Windows user in LocalAppData\Programs\Swift.
+A Start menu shortcut and Windows Installed Apps uninstall entry are created.
+Desktop and start-at-sign-in shortcuts are optional.
+Close any older portable copy before installing.
+
+Settings
+Search folders remain in %LOCALAPPDATA%\SwiftLauncher\roots.txt.
+Uninstall preserves those preferences and never deletes your indexed files.
+
+Requirements
+64-bit Windows 10/11 with .NET Framework 4.7.2 or newer.
+No browser runtime or online account is required.
+This personal build is unsigned.
+
+AI disclosure: Substantially developed with OpenAI Codex under human direction. Experimental software.
+Inspiration: Vinyl Launcher on Linux by u/Jaskaran_jassal. This is an independent, unofficial Windows recreation, not a translation of its source.
+Original demonstration: https://www.reddit.com/r/unixporn/comments/1tpp7kq/oc_fed_up_with_other_app_launchers_so_i_built_my/
