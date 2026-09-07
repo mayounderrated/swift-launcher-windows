@@ -12,6 +12,12 @@ Setup installs for the current user, adds a Start menu shortcut and Windows unin
 
 Requires 64-bit Windows 10/11 and .NET Framework 4.7.2 or newer. The installer is unsigned.
 
+## Preview
+Here's a quick preview of the software:
+<img width="3838" height="2158" alt="image" src="https://github.com/user-attachments/assets/c1d6678e-9f24-4e01-b2ad-31c0ff6f0a57" />
+
+
+
 ## Inspiration and credit
 
 The circular disc layout and interaction idea come from **Vinyl Launcher**, demonstrated on Linux by **u/Jaskaran_jassal**:
