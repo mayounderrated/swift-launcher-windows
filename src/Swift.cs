@@ -31,6 +31,9 @@ namespace Swift {
     using(var form=new Launcher(true)) { form.LoadDemo(); form.Show(); var watch=Stopwatch.StartNew();while(watch.ElapsedMilliseconds<1500){Application.DoEvents();Thread.Sleep(10);} using(var bitmap=new Bitmap(form.Width,form.Height)) { form.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));using(var clipped=new Bitmap(form.Width,form.Height)){using(var g=Graphics.FromImage(clipped)){g.Clear(Color.Transparent);g.SetClip(form.Region,CombineMode.Replace);g.DrawImageUnscaled(bitmap,0,0);}clipped.Save(args[1]);} } }
     return;
    }
+   if(args.Length>1 && args[0]=="--render-settings") {
+    using(var form=new SettingsForm(SwiftSettings.Load(),null)){form.Show();Application.DoEvents();using(var bitmap=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));bitmap.Save(args[1]);}}return;
+   }
    bool created; using(var mutex=new Mutex(true,"Local\\SwiftLauncher.1",out created)) {
     if(!created){NotifyExisting(0x8001);return;}
     Application.Run(new Launcher(args.Length>0 && args[0]=="--smoke-test"));
@@ -38,10 +41,12 @@ namespace Swift {
   }
  }
  sealed class Entry {
-  public readonly string Path,Name,Lower; public readonly bool App,Shell;
+  public readonly string Path,Name,Lower,Payload; public readonly bool App,Shell;public readonly EntryAction Action;
   public Entry(string path):this(path,System.IO.Path.GetFileName(path),false,false){}
-  public Entry(string path,string name,bool app,bool shell) { Path=path; Name=name; Lower=name.ToLowerInvariant(); App=app; Shell=shell; }
-  public string IconKey {get{return !App && FileIcons.Supports(Path)?"filetype:"+System.IO.Path.GetExtension(Path).ToLowerInvariant():Path;}}
+  public Entry(string path,string name,bool app,bool shell):this(path,name,app,shell,EntryAction.None,null){}
+  Entry(string path,string name,bool app,bool shell,EntryAction action,string payload) { Path=path; Name=name; Lower=name.ToLowerInvariant(); App=app; Shell=shell;Action=action;Payload=payload; }
+  public static Entry Special(string name,EntryAction action,string payload){return new Entry("swift:"+action+":"+payload,name,false,false,action,payload);}
+  public string IconKey {get{return Action!=EntryAction.None?"action:"+Action:!App && FileIcons.Supports(Path)?"filetype:"+System.IO.Path.GetExtension(Path).ToLowerInvariant():Path;}}
   public ProcessStartInfo LaunchInfo(bool reveal) {
    if(reveal) return new ProcessStartInfo("explorer.exe",Shell?"shell:AppsFolder":"/select,\""+Path+"\""){UseShellExecute=true};
    return Shell?new ProcessStartInfo("explorer.exe","\"shell:AppsFolder\\"+Path+"\""){UseShellExecute=true}:new ProcessStartInfo(Path){UseShellExecute=true};
@@ -79,6 +84,11 @@ namespace Swift {
    if(app.LaunchInfo(false).Arguments!="\"shell:AppsFolder\\Example.Package!App\"")return 6;
    if(file.LaunchInfo(false).FileName!=file.Path)return 7;
    if(Find(entries,"xyz",2,CancellationToken.None).Count!=0)return 8;
+   string answer;if(!CalculatorEngine.TryEvaluate("(12+4)*3",out answer)||answer!="48")return 9;
+   if(!CalculatorEngine.TryEvaluate("sqrt(81)+2^3",out answer)||answer!="17")return 10;
+   if(CalculatorEngine.TryEvaluate("hello",out answer)||CalculatorEngine.TryEvaluate("2+",out answer))return 11;
+   if(!CalculatorEngine.TryEvaluate("-2^2",out answer)||answer!="-4")return 12;
+   var action=Entry.Special("Search Google",EntryAction.Google,"swift launcher");if(action.IconKey!="action:Google"||action.Payload!="swift launcher")return 13;
    return 0;
   }
  }
@@ -181,6 +191,7 @@ namespace Swift {
    return image;
   }
   public static Bitmap Load(Entry entry) {
+   if(entry.Action!=EntryAction.None)return ActionIcons.Load(entry.Action);
    if(!entry.App&&FileIcons.Supports(entry.Path))return FileIcons.Load(entry.Path);
    ImageFactory factory=null;IntPtr bitmap=IntPtr.Zero;
    try {
@@ -200,6 +211,9 @@ namespace Swift {
    }catch{return null;}finally{if(info.icon!=IntPtr.Zero)DestroyIcon(info.icon);if(pidl!=IntPtr.Zero)Marshal.FreeCoTaskMem(pidl);}
   }
  }
+ static class ActionIcons {
+  public static Bitmap Load(EntryAction action){var image=new Bitmap(256,256,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);using(var g=Graphics.FromImage(image)){g.SmoothingMode=SmoothingMode.AntiAlias;Color color=action==EntryAction.Google?Color.FromArgb(66,133,244):action==EntryAction.Calculator?Color.FromArgb(92,184,120):Color.FromArgb(154,126,220);using(var brush=new SolidBrush(color))g.FillEllipse(brush,18,18,220,220);string text=action==EntryAction.Google?"G":action==EntryAction.Calculator?"=":"⚙";using(var font=new Font("Segoe UI",action==EntryAction.Settings?100:120,FontStyle.Bold,GraphicsUnit.Pixel))using(var white=new SolidBrush(Color.White))using(var format=new StringFormat{Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center})g.DrawString(text,font,white,new RectangleF(18,10,220,226),format);}return image;}
+ }
  sealed class Dial : Control {
   public List<Entry> Entries=new List<Entry>(); public int Selected;
   public Action Changed,Launch;
@@ -209,7 +223,7 @@ namespace Swift {
   readonly Font large=new Font("Segoe UI",19,FontStyle.Bold),small=new Font("Segoe UI",9),micro=new Font("Segoe UI",8);
   double offset,dragAngle,offsetStart;double animationDuration=180,outgoingOffset;List<Entry> outgoingRing;int outgoingSelected; bool dragging,moved;
   readonly Stopwatch selectionClock=new Stopwatch();Entry previous;double selectionMix=1;
-  static readonly Color Accent=Color.FromArgb(203,185,255),Muted=Color.FromArgb(145,143,161);
+  Palette palette=Palette.From(new SwiftSettings());double speed=1;
   public Dial() {
    DoubleBuffered=true; BackColor=Color.FromArgb(17,17,17); Cursor=Cursors.Hand;
    animation.Interval=16; animation.Tick+=delegate {double t=Math.Min(1,selectionClock.Elapsed.TotalMilliseconds/animationDuration);selectionMix=1-Math.Pow(1-t,3);offset=offsetStart*(1-selectionMix);if(t>=1){offset=0;previous=null;outgoingRing=null;animation.Stop();}Invalidate(); };
@@ -219,6 +233,7 @@ namespace Swift {
    MouseUp+=delegate(object s,MouseEventArgs e){if(!dragging)return;dragging=false;Capture=false;if(moved)return;int dx=(int)(e.X/CanvasScale)-250,dy=(int)(e.Y/CanvasScale)-250;if(dx*dx+dy*dy<140*140){if(Launch!=null)Launch();return;}int step=(int)Math.Round(Angle(e.Location)/(Math.PI*2/10));MoveSelection(step);};
    VisibleChanged+=delegate { if(!Visible){animation.Stop();offset=0;previous=null;outgoingRing=null;selectionMix=1;} };
   }
+  public void ApplySettings(SwiftSettings settings){palette=Palette.From(settings);speed=settings.AnimationScale;BackColor=palette.Back;Invalidate();}
   float CanvasScale {get{return Width/500f;}}
   double Angle(Point p){return Math.Atan2(p.Y/CanvasScale-250,p.X/CanvasScale-250);}
   Size regionSize;
@@ -228,11 +243,11 @@ namespace Swift {
    bool animate=Visible&&IsHandleCreated&&(Entries.Count>0||entries.Count>0);
    previous=Current;outgoingRing=animate?Entries:null;outgoingSelected=Selected;outgoingOffset=offset;
    Entries=entries;Selected=0;
-   if(animate){offsetStart=offset=Math.PI*0.4;selectionMix=0;animationDuration=220;selectionClock.Restart();animation.Start();}
-   else{offset=0;previous=null;selectionMix=1;animation.Stop();}
+   if(animate&&speed>0){offsetStart=offset=Math.PI*0.4;selectionMix=0;animationDuration=220*speed;selectionClock.Restart();animation.Start();}
+   else{offset=0;previous=null;outgoingRing=null;selectionMix=1;animation.Stop();}
    QueueIcons();Invalidate();if(Changed!=null)Changed();
   }
-  public void MoveSelection(int delta){if(Entries.Count==0||delta==0)return;outgoingRing=null;animationDuration=180;previous=Current;Selected=(Selected+delta%Entries.Count+Entries.Count)%Entries.Count;offset+=delta*Math.PI*2/10;offsetStart=offset;selectionMix=0;selectionClock.Restart();animation.Start();QueueIcons();Invalidate();if(Changed!=null)Changed();}
+  public void MoveSelection(int delta){if(Entries.Count==0||delta==0)return;outgoingRing=null;previous=Current;Selected=(Selected+delta%Entries.Count+Entries.Count)%Entries.Count;if(speed>0){animationDuration=180*speed;offset+=delta*Math.PI*2/10;offsetStart=offset;selectionMix=0;selectionClock.Restart();animation.Start();}else{offset=0;previous=null;selectionMix=1;}QueueIcons();Invalidate();if(Changed!=null)Changed();}
   public Entry Current {get{return Entries.Count==0?null:Entries[Selected];}}
   void QueueIcons(){if(!IsHandleCreated)return;for(int step=-4;step<=5;step++){if(Entries.Count==0)break;var entry=Entries[(Selected+step%Entries.Count+Entries.Count)%Entries.Count];if(icons.ContainsKey(entry.IconKey)||!loading.Add(entry.IconKey))continue;
    IconWorker.Enqueue(delegate { if(IsDisposed)return;var bitmap=ShellIcons.Load(entry);try { BeginInvoke((Action)delegate {loading.Remove(entry.IconKey);if(IsDisposed){if(bitmap!=null)bitmap.Dispose();return;}if(icons.Count>=96){foreach(var old in icons.Values)if(old!=null)old.Dispose();icons.Clear();}icons[entry.IconKey]=bitmap;Invalidate();}); }catch(InvalidOperationException){if(bitmap!=null)bitmap.Dispose();} });
@@ -250,23 +265,24 @@ namespace Swift {
    if(alpha<0.01f||entries.Count==0)return;var drawn=new HashSet<int>();int[] steps={0,1,-1,2,-2,3,-3,4,-4,5};
    foreach(int step in steps){int idx=(selected+step%entries.Count+entries.Count)%entries.Count;if(!drawn.Add(idx))continue;double a=step*Math.PI*2/10+angle;int x=250+(int)(Math.Cos(a)*201),y=250+(int)(Math.Sin(a)*201);Bitmap icon;
     if(icons.TryGetValue(entries[idx].IconKey,out icon)&&icon!=null){float ratio=Math.Min(44f/icon.Width,44f/icon.Height);int w=(int)(icon.Width*ratio),h=(int)(icon.Height*ratio);using(var attr=new System.Drawing.Imaging.ImageAttributes()){var matrix=new System.Drawing.Imaging.ColorMatrix();matrix.Matrix33=alpha;attr.SetColorMatrix(matrix);g.DrawImage(icon,new Rectangle(x-w/2,y-h/2,w,h),0,0,icon.Width,icon.Height,GraphicsUnit.Pixel,attr);}}
-    else{using(var brush=new SolidBrush(Color.FromArgb((int)(255*alpha),47,47,47)))g.FillEllipse(brush,x-22,y-22,44,44);int level=(int)(17+238*alpha);Label(g,entries[idx].App?entries[idx].Name.Substring(0,1).ToUpperInvariant():"F",small,Color.FromArgb(level,level,level),new Rectangle(x-22,y-22,44,44));}
+    else{using(var brush=new SolidBrush(Color.FromArgb((int)(255*alpha),palette.Button)))g.FillEllipse(brush,x-22,y-22,44,44);Label(g,entries[idx].App?entries[idx].Name.Substring(0,1).ToUpperInvariant():"F",small,Color.FromArgb((int)(255*alpha),palette.Text),new Rectangle(x-22,y-22,44,44));}
    }
   }
   protected override void OnPaint(PaintEventArgs e){
    var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.ScaleTransform(CanvasScale,CanvasScale);
-   using(var brush=new SolidBrush(Color.FromArgb(17,17,17)))g.FillEllipse(brush,1,1,498,498);
-   using(var brush=new SolidBrush(Color.FromArgb(32,32,32)))g.FillEllipse(brush,100,100,300,300);
+   using(var brush=new SolidBrush(palette.Back))g.FillEllipse(brush,1,1,498,498);
+   using(var brush=new SolidBrush(palette.Inner))g.FillEllipse(brush,100,100,300,300);
+   using(var pen=new Pen(Color.FromArgb(150,palette.Accent),3))g.DrawEllipse(pen,204,188,92,92);
    if(Current!=null){
     Bitmap selectedIcon;
     if(icons.TryGetValue(Current.IconKey,out selectedIcon)&&selectedIcon!=null)DrawSelected(g,selectedIcon);
-    else {using(var brush=new SolidBrush(Color.FromArgb(49,49,49)))g.FillEllipse(brush,210,194,80,80);Label(g,Current.App?Current.Name.Substring(0,1).ToUpperInvariant():"F",large,Color.White,new Rectangle(210,194,80,80));}
+    else {using(var brush=new SolidBrush(palette.Button))g.FillEllipse(brush,210,194,80,80);Label(g,Current.App?Current.Name.Substring(0,1).ToUpperInvariant():"F",large,palette.Text,new Rectangle(210,194,80,80));}
    }
-   Label(g,Current==null?"No matches":Current.Name,small,Color.White,new Rectangle(116,290,268,34));
-   Label(g,Current==null?"Type to search":"ENTER TO OPEN",micro,Color.FromArgb(125,125,125),new Rectangle(150,324,200,20));
+   Label(g,Current==null?"No matches":Current.Name,small,palette.Text,new Rectangle(116,290,268,34));
+   Label(g,Current==null?"Type to search":Current.Action==EntryAction.Calculator?"ENTER TO COPY":"ENTER TO OPEN",micro,palette.Muted,new Rectangle(150,324,200,20));
    if(outgoingRing!=null)DrawRing(g,outgoingRing,outgoingSelected,outgoingOffset-Math.PI*0.4*selectionMix,(float)(1-selectionMix));
    DrawRing(g,Entries,Selected,offset,outgoingRing!=null?(float)selectionMix:1f);
-   Label(g,Entries.Count==0?"":(Selected+1)+" / "+Entries.Count,micro,Color.FromArgb(111,111,111),new Rectangle(200,357,100,20));
+   Label(g,Entries.Count==0?"":(Selected+1)+" / "+Entries.Count,micro,palette.Muted,new Rectangle(200,357,100,20));
   }
 
  }
@@ -285,7 +301,9 @@ namespace Swift {
   readonly Bitmap frame,canvas;readonly Graphics graphics;readonly IntPtr dc,dib,oldBitmap;
   readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch clock=new Stopwatch();readonly Action<bool> completed;
   double progress,start,target;bool disposed;internal int FrameCount;
-  public TransitionWindow(Bitmap image,Region outline,Rectangle bounds,bool opening,Action<bool> done){
+  readonly double durationScale;
+  public TransitionWindow(Bitmap image,Region outline,Rectangle bounds,bool opening,double speed,Action<bool> done){
+   durationScale=speed;
    completed=done;FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;StartPosition=FormStartPosition.Manual;Bounds=bounds;
    frame=new Bitmap(image.Width,image.Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
    using(var g=Graphics.FromImage(frame)){g.Clear(Color.Transparent);g.SetClip(outline,CombineMode.Replace);g.DrawImageUnscaled(image,0,0);}image.Dispose();outline.Dispose();
@@ -297,7 +315,7 @@ namespace Swift {
   protected override bool ShowWithoutActivation {get{return true;}}
   protected override CreateParams CreateParams {get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80000|0x80|0x20;return p;}}
   public void Play(bool opening){start=progress;target=opening?1:0;RenderFrame();if(!Visible)Show();clock.Restart();timer.Start();}
-  void TickFrame(){FrameCount++;double t=Math.Min(1,clock.Elapsed.TotalMilliseconds/(target>start?220:180));progress=start+(target-start)*(1-Math.Pow(1-t,3));RenderFrame();if(t>=1){timer.Stop();completed(target==1);}}
+  void TickFrame(){FrameCount++;double t=Math.Min(1,clock.Elapsed.TotalMilliseconds/((target>start?220:180)*durationScale));progress=start+(target-start)*(1-Math.Pow(1-t,3));RenderFrame();if(t>=1){timer.Stop();completed(target==1);}}
   void RenderFrame(){float scale=(float)(0.92+0.08*progress);graphics.Clear(Color.Transparent);graphics.DrawImage(frame,new RectangleF(frame.Width*(1-scale)/2,frame.Height*(1-scale)/2,frame.Width*scale,frame.Height*scale));graphics.Flush();var pos=new Pair(Left,Top);var size=new Pair(frame.Width,frame.Height);var origin=new Pair(0,0);var blend=new Blend{Alpha=(byte)(255*progress),Format=1};if(!UpdateLayeredWindow(Handle,IntPtr.Zero,ref pos,ref size,dc,ref origin,0,ref blend,2))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}
   protected override void Dispose(bool disposing){if(disposing&&!disposed){disposed=true;timer.Dispose();if(graphics!=null)graphics.Dispose();if(canvas!=null)canvas.Dispose();if(dc!=IntPtr.Zero)SelectObject(dc,oldBitmap);if(dib!=IntPtr.Zero)DeleteObject(dib);if(dc!=IntPtr.Zero)DeleteDC(dc);if(frame!=null)frame.Dispose();}base.Dispose(disposing);}
  }
@@ -305,7 +323,7 @@ namespace Swift {
   [DllImport("user32.dll",SetLastError=true)]static extern bool RegisterHotKey(IntPtr hwnd,int id,uint mods,uint key);
   [DllImport("user32.dll")]static extern bool UnregisterHotKey(IntPtr hwnd,int id);
   readonly Action toggle,show,quit;public readonly bool Registered;
-  public HotkeyListener(Action action,Action showAction=null,Action quitAction=null){toggle=action;show=showAction;quit=quitAction;CreateHandle(new CreateParams{Caption="Swift hotkey",Parent=new IntPtr(-3)});Registered=RegisterHotKey(Handle,1,0x4002,0x20);}
+  public HotkeyListener(Action action,uint modifiers,uint key,Action showAction=null,Action quitAction=null){toggle=action;show=showAction;quit=quitAction;CreateHandle(new CreateParams{Caption="Swift hotkey",Parent=new IntPtr(-3)});Registered=RegisterHotKey(Handle,1,modifiers,key);}
   protected override void WndProc(ref Message m){if(m.Msg==0x8001&&show!=null){show();return;}if(m.Msg==0x8002&&quit!=null){quit();return;}if(m.Msg==0x312&&m.WParam.ToInt32()==1){toggle();return;}base.WndProc(ref m);}
   public void Dispose(){UnregisterHotKey(Handle,1);DestroyHandle();}
  }
@@ -323,10 +341,10 @@ namespace Swift {
   [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h,int id,uint mods,uint key);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr handle,int message,IntPtr wParam,string text);
   [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h,int id);
-  readonly TextBox input=new TextBox();readonly Dial dial=new Dial();readonly Label status=new Label(),name=new Label(),kind=new Label(),detail=new Label();
+  readonly TextBox input=new TextBox();readonly Dial dial=new Dial();readonly Label status=new Label(),name=new Label(),kind=new Label(),detail=new Label(),glyph=new Label();readonly Panel searchPanel=new Panel();
   readonly Button[] tabs=new Button[3];readonly NotifyIcon tray=new NotifyIcon();readonly System.Windows.Forms.Timer debounce=new System.Windows.Forms.Timer();
   readonly string config=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SwiftLauncher","roots.txt");
-  Entry[] index=new Entry[0];CancellationTokenSource searchCancel;bool exiting,indexing,dirty;int generation,mode;string indexNote="Loading apps…";string appWarning="";
+  Entry[] index=new Entry[0];CancellationTokenSource searchCancel;bool exiting,indexing,dirty;int generation,mode;string indexNote="Loading apps…";string appWarning="";SwiftSettings settings=SwiftSettings.Load();ToolStripMenuItem openMenu;
   internal Action<string> Trace {get;set;}void Note(string text){if(Trace!=null)Trace(text+" visible="+Visible+" wanted="+wantedVisible+" moving="+(transition!=null));}
   internal int LastMotionFrames;
   [DllImport("dwmapi.dll")]static extern int DwmFlush();
@@ -343,8 +361,8 @@ namespace Swift {
     shape.StartFigure();shape.AddArc(20,16,48,48,180,90);shape.AddArc(472,16,48,48,270,90);shape.AddArc(472,36,48,48,0,90);shape.AddArc(20,36,48,48,90,90);shape.CloseFigure();
     Region=new Region(shape);
    }
-   var searchPanel=new Panel{BackColor=Color.FromArgb(17,17,17)};searchPanel.SetBounds(35,22,468,56);Controls.Add(searchPanel);
-   var glyph=new Label{Text="⌕",Font=new Font("Segoe UI",22),ForeColor=Color.FromArgb(165,165,165)};glyph.SetBounds(0,5,38,42);searchPanel.Controls.Add(glyph);
+   searchPanel.SetBounds(35,22,468,56);Controls.Add(searchPanel);
+   glyph.Text="⌕";glyph.Font=new Font("Segoe UI",22);glyph.SetBounds(0,5,38,42);searchPanel.Controls.Add(glyph);
    input.BorderStyle=BorderStyle.None;input.Font=new Font("Segoe UI",16);input.BackColor=searchPanel.BackColor;input.ForeColor=ForeColor;input.SetBounds(39,15,321,33);input.AccessibleName="Fuzzy search apps and files";searchPanel.Controls.Add(input);
    tabs[0]=MakeButton("Apps ▾",405,34,90,33);searchPanel.Controls.Add(tabs[0]);tabs[0].Location=new Point(370,11);tabs[0].BringToFront();tabs[0].Click+=delegate{SetMode((mode+1)%3);};
    dial.SetBounds(20,104,500,500);using(var circle=new GraphicsPath()){circle.AddEllipse(0,0,500,500);dial.Region=new Region(circle);}Controls.Add(dial);dial.Changed=SelectionChanged;dial.Launch=delegate{OpenSelected(false);};
@@ -352,20 +370,24 @@ namespace Swift {
    input.TextChanged+=delegate{dirty=true;debounce.Stop();debounce.Start();};debounce.Interval=45;debounce.Tick+=delegate{debounce.Stop();RefreshResults();};
    KeyDown+=KeysPressed;MouseWheel+=delegate(object s,MouseEventArgs e){dial.MoveSelection(e.Delta>0?-1:1);};
    Deactivate+=delegate{Note("deactivate");if(wantedVisible && !changingVisibility)Dismiss();};
-   var menu=new ContextMenuStrip();menu.Items.Add("Open · Ctrl+Space",null,delegate{Reveal();});menu.Items.Add("Refresh apps and files",null,delegate{Reindex();});menu.Items.Add("Edit file search folders",null,delegate{try{EnsureConfig();Process.Start("notepad.exe","\""+config+"\"");}catch(Exception ex){status.Text=ex.Message;}});menu.Items.Add("Exit",null,delegate{exiting=true;Close();});
-   tray.Icon=Icon;tray.Text="Swift · Ctrl+Space";tray.ContextMenuStrip=menu;tray.Visible=!smoke;tray.DoubleClick+=delegate{Reveal();};
-   Shown+=delegate{SendMessage(input.Handle,0x1501,new IntPtr(1),"Search apps or files…");if(!smoke){if(!(hotkey=new HotkeyListener(delegate{if(wantedVisible)Dismiss();else Reveal();},Reveal,delegate{exiting=true;Close();})).Registered){tray.BalloonTipTitle="Ctrl+Space is already in use";tray.BalloonTipText="Open Swift from its tray icon.";tray.ShowBalloonTip(4000);}focusMonitor=new FocusMonitor(delegate{if(wantedVisible)Dismiss();});Reveal();Reindex();}else{var timer=new System.Windows.Forms.Timer();timer.Interval=2200;timer.Tick+=delegate{timer.Dispose();exiting=true;Close();};timer.Start();}};
+   var menu=new ContextMenuStrip();openMenu=(ToolStripMenuItem)menu.Items.Add("Open",null,delegate{Reveal();});menu.Items.Add("Settings",null,delegate{OpenSettings();});menu.Items.Add("Refresh apps and files",null,delegate{Reindex();});menu.Items.Add("Edit file search folders",null,delegate{try{EnsureConfig();Process.Start("notepad.exe","\""+config+"\"");}catch(Exception ex){status.Text=ex.Message;}});menu.Items.Add("Exit",null,delegate{exiting=true;Close();});
+   tray.Icon=Icon;tray.ContextMenuStrip=menu;tray.Visible=!smoke;tray.DoubleClick+=delegate{Reveal();};
+   Shown+=delegate{SendMessage(input.Handle,0x1501,new IntPtr(1),"Apps, files, g web, or maths…");if(!smoke){RegisterConfiguredHotkey(true);focusMonitor=new FocusMonitor(delegate{if(wantedVisible)Dismiss();});Reveal();Reindex();}else{var timer=new System.Windows.Forms.Timer();timer.Interval=2200;timer.Tick+=delegate{timer.Dispose();exiting=true;Close();};timer.Start();}};
    float scale;using(var screen=Graphics.FromHwnd(IntPtr.Zero))scale=screen.DpiX/96f;
    if(Math.Abs(scale-1)>0.01f){Scale(new SizeF(scale,scale));ClientSize=new Size((int)(540*scale),(int)(620*scale));using(var matrix=new Matrix()){matrix.Scale(scale,scale);Region.Transform(matrix);}}
-   SetMode(2);
+   SetMode(settings.Mode);ApplySettings();
   }
   Button MakeButton(string text,int x,int y,int w,int h){var b=new Button{Text=text,FlatStyle=FlatStyle.Flat,ForeColor=ForeColor,BackColor=Color.FromArgb(35,32,45),Cursor=Cursors.Hand,TabStop=false};b.FlatAppearance.BorderSize=0;b.SetBounds(x,y,w,h);Controls.Add(b);return b;}
   protected override bool ProcessCmdKey(ref Message msg,Keys key){if(key==Keys.Tab||key==(Keys.Shift|Keys.Tab)){SetMode((mode+(key==Keys.Tab?1:2))%3);return true;}return base.ProcessCmdKey(ref msg,key);}
-  void SetMode(int value){dirty=true;mode=value;if(tabs[0]!=null){tabs[0].Text=new[]{"Apps ▾","Files ▾","All ▾"}[mode];tabs[0].BackColor=Color.FromArgb(35,35,35);tabs[0].ForeColor=Color.FromArgb(190,190,190);}RefreshResults();input.Focus();}
-  void SelectionChanged(){var e=dial.Current;status.Text=e==null?"":e.App?"APPLICATION":"FILE";}
+  void SetMode(int value){dirty=true;mode=value;if(tabs[0]!=null){var p=Palette.From(settings);tabs[0].Text=new[]{"Apps ▾","Files ▾","All ▾"}[mode];tabs[0].BackColor=p.Button;tabs[0].ForeColor=p.Text;}RefreshResults();input.Focus();}
+  void SelectionChanged(){var e=dial.Current;status.Text=e==null?"":e.Action==EntryAction.Google?"GOOGLE SEARCH":e.Action==EntryAction.Calculator?"CALCULATOR":e.Action==EntryAction.Settings?"SETTINGS":e.App?"APPLICATION":"FILE";}
+  void ApplySettings(){var p=Palette.From(settings);BackColor=p.Back;ForeColor=p.Text;searchPanel.BackColor=p.Panel;input.BackColor=p.Panel;input.ForeColor=p.Text;glyph.ForeColor=p.Muted;status.BackColor=p.Inner;status.ForeColor=p.Accent;dial.ApplySettings(settings);if(tabs[0]!=null){tabs[0].BackColor=p.Button;tabs[0].ForeColor=p.Text;}string text="Swift · "+settings.HotkeyText;tray.Text=text.Length>63?"Swift":text;if(openMenu!=null)openMenu.Text="Open · "+settings.HotkeyText;Invalidate(true);}
+  bool RegisterConfiguredHotkey(bool notify){if(hotkey!=null){hotkey.Dispose();hotkey=null;}hotkey=new HotkeyListener(delegate{if(wantedVisible)Dismiss();else Reveal();},settings.HotkeyModifiers,settings.HotkeyKey,Reveal,delegate{exiting=true;Close();});if(!hotkey.Registered&&notify){tray.BalloonTipTitle=settings.HotkeyText+" is already in use";tray.BalloonTipText="Choose another shortcut in Swift Settings.";tray.ShowBalloonTip(4000);}return hotkey.Registered;}
+  bool TryApplySettings(SwiftSettings value){var previous=settings;if(hotkey!=null){hotkey.Dispose();hotkey=null;}settings=value;hotkey=new HotkeyListener(delegate{if(wantedVisible)Dismiss();else Reveal();},settings.HotkeyModifiers,settings.HotkeyKey,Reveal,delegate{exiting=true;Close();});if(!hotkey.Registered){hotkey.Dispose();hotkey=null;settings=previous;RegisterConfiguredHotkey(false);return false;}SetMode(settings.Mode);ApplySettings();return true;}
+  void OpenSettings(){wantedVisible=false;if(transition!=null){transition.Dispose();transition=null;}if(Visible)Hide();using(var form=new SettingsForm(settings,TryApplySettings)){form.ShowDialog();}}
   void Reveal(){
    Note("reveal");
-   if(input.Text.Length>0){
+   if(settings.ClearSearch&&input.Text.Length>0){
     input.Clear();debounce.Stop();if(searchCancel!=null)searchCancel.Cancel();generation++;dirty=false;
     dial.SetEntries(Search.Find(index,"",mode,CancellationToken.None));
     if(transition!=null){transition.Dispose();transition=null;}
@@ -379,7 +401,8 @@ namespace Swift {
   void BeginTransition(bool opening){
    try{
     var frame=new Bitmap(Width,Height);DrawToBitmap(frame,new Rectangle(0,0,Width,Height));
-    transition=new TransitionWindow(frame,Region.Clone(),Bounds,opening,delegate(bool shown){
+    if(settings.AnimationScale<=0){if(opening){Show();Activate();SetForegroundWindow(Handle);input.Focus();}else Hide();return;}
+    transition=new TransitionWindow(frame,Region.Clone(),Bounds,opening,settings.AnimationScale,delegate(bool shown){
      Note("finish "+shown);var finished=transition;LastMotionFrames=finished==null?0:finished.FrameCount;transition=null;
      changingVisibility=true;
      try {if(shown){Opacity=1;Show();Activate();SetForegroundWindow(Handle);input.Focus();Invalidate(true);}else{Hide();Opacity=1;}if(finished!=null)finished.Dispose();}finally{changingVisibility=false;}
@@ -399,7 +422,7 @@ namespace Swift {
    if(e.KeyCode==Keys.Enter){OpenSelected(e.Control);e.SuppressKeyPress=true;}
    if(e.KeyCode==Keys.F5){Reindex();e.SuppressKeyPress=true;}
   }
-  void OpenSelected(bool folder){if(dirty){dial.SetEntries(Search.Find(index,input.Text.Trim().ToLowerInvariant(),mode,CancellationToken.None));dirty=false;}var entry=dial.Current;if(entry==null)return;try{Process.Start(entry.LaunchInfo(folder));Dismiss();}catch(Exception ex){status.Text="Could not open: "+ex.Message;}}
+  void OpenSelected(bool folder){if(dirty){dial.SetEntries(BuildResults(index,input.Text.Trim(),mode,CancellationToken.None));dirty=false;}var entry=dial.Current;if(entry==null)return;try{if(entry.Action==EntryAction.Google)Process.Start(new ProcessStartInfo("https://www.google.com/search?q="+Uri.EscapeDataString(entry.Payload)){UseShellExecute=true});else if(entry.Action==EntryAction.Calculator){Clipboard.SetText(entry.Payload);status.Text="COPIED "+entry.Payload;return;}else if(entry.Action==EntryAction.Settings){Dismiss();BeginInvoke((Action)OpenSettings);return;}else Process.Start(entry.LaunchInfo(folder));Dismiss();}catch(Exception ex){status.Text="Could not open: "+ex.Message;}}
   void EnsureConfig(){Directory.CreateDirectory(Path.GetDirectoryName(config));if(!File.Exists(config))File.WriteAllLines(config,new[]{"# One file search folder per line. Save and press F5. Apps are discovered separately.",Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Downloads")});}
   void Reindex(){if(indexing)return;indexing=true;status.Text="Loading apps…";
    var thread=new Thread(delegate(){
@@ -421,8 +444,9 @@ namespace Swift {
    });thread.IsBackground=true;thread.SetApartmentState(ApartmentState.STA);thread.Start();
   }
   void Post(Action action){try{if(!IsDisposed&&IsHandleCreated)BeginInvoke(action);}catch(InvalidOperationException){}}
-  void RefreshResults(){if(!IsHandleCreated)return;if(searchCancel!=null)searchCancel.Cancel();searchCancel=new CancellationTokenSource();var token=searchCancel.Token;int version=++generation,filter=mode;string query=input.Text.Trim().ToLowerInvariant();Entry[] snapshot=index;
-   Task.Run(delegate{var matches=Search.Find(snapshot,query,filter,token);Post(delegate{if(version!=generation)return;dirty=false;dial.SetEntries(matches);status.Text=matches.Count==0?(indexing?"INDEXING…":"NO RESULTS"):matches[0].App?"APPLICATION":"FILE";});});
+  List<Entry> BuildResults(Entry[] snapshot,string raw,int filter,CancellationToken token){string query=raw.Trim(),lower=query.ToLowerInvariant();if(settings.Google&&lower.StartsWith("g ")&&query.Length>2)return new List<Entry>{Entry.Special("Search Google for “"+query.Substring(2).Trim()+"”",EntryAction.Google,query.Substring(2).Trim())};var matches=Search.Find(snapshot,lower,filter,token);string answer;if(settings.Calculator&&CalculatorEngine.TryEvaluate(query,out answer))matches.Insert(0,Entry.Special(query+" = "+answer,EntryAction.Calculator,answer));if(lower=="settings"||lower=="preferences")matches.Insert(0,Entry.Special("Swift Settings",EntryAction.Settings,""));return matches;}
+  void RefreshResults(){if(!IsHandleCreated)return;if(searchCancel!=null)searchCancel.Cancel();searchCancel=new CancellationTokenSource();var token=searchCancel.Token;int version=++generation,filter=mode;string query=input.Text.Trim();Entry[] snapshot=index;
+   Task.Run(delegate{var matches=BuildResults(snapshot,query,filter,token);Post(delegate{if(version!=generation)return;dirty=false;dial.SetEntries(matches);status.Text=matches.Count==0?(indexing?"INDEXING…":"NO RESULTS"):matches[0].Action==EntryAction.Google?"GOOGLE SEARCH":matches[0].Action==EntryAction.Calculator?"CALCULATOR":matches[0].Action==EntryAction.Settings?"SETTINGS":matches[0].App?"APPLICATION":"FILE";});});
   }
   public void LoadDemo(){string note;var apps=Catalog.Apps(out note);index=apps.ToArray();indexNote=apps.Count+" apps";dial.SetEntries(new List<Entry>(apps));}
  }

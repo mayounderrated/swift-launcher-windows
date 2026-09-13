@@ -1,4 +1,4 @@
-﻿#define AppVersion "1.0.0"
+#define AppVersion "2.0.0"
 [Setup]
 AppId={{C84566B8-823F-4C9E-AC18-ED68BC5609F7}
 AppName=Swift
@@ -22,8 +22,8 @@ RestartApplications=no
 Compression=lzma2
 SolidCompression=yes
 OutputDir=..\dist
-OutputBaseFilename=Swift-Setup-1.0.0
-VersionInfoVersion=1.0.0.0
+OutputBaseFilename=Swift-Setup-2.0.0
+VersionInfoVersion=2.0.0.0
 VersionInfoDescription=Swift Launcher Setup
 
 [Tasks]

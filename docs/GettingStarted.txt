@@ -1,4 +1,4 @@
-﻿Swift Launcher 1.0
+Swift Launcher 2.0
 
 Ctrl+Space: open or hide Swift.
 Type to search apps and files. Each opening clears the previous query.
@@ -7,6 +7,11 @@ Scroll or use Up/Down to select, Enter to open, Ctrl+Enter to reveal in Explorer
 Escape or switching to another app dismisses Swift.
 Right-click the tray icon for refresh, search folders, and Exit.
 
+Quick actions
+Type g followed by a search, such as "g weather tomorrow", then press Enter to search Google.
+Type a maths expression, such as "(12+4)*3" or "sqrt(81)", then press Enter to copy the result.
+Type "settings" or choose Settings from the tray menu to open preferences.
+
 Installation
 Setup installs for the current Windows user in LocalAppData\Programs\Swift.
 A Start menu shortcut and Windows Installed Apps uninstall entry are created.
@@ -14,6 +19,8 @@ Desktop and start-at-sign-in shortcuts are optional.
 Close any older portable copy before installing.
 
 Settings
+Choose a dark, light, or Windows theme; accent colour; animation speed; global shortcut; default mode; search features; and sign-in startup from the Settings window.
+Settings are saved in %LOCALAPPDATA%\SwiftLauncher\settings.ini.
 Search folders remain in %LOCALAPPDATA%\SwiftLauncher\roots.txt.
 Uninstall preserves those preferences and never deletes your indexed files.
 
